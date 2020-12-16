@@ -37,7 +37,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	sub := cloudclient.SubscriptionInProject("loki-subscription", projectID)
+	sub := cloudclient.SubscriptionInProject("dev-logs-pull", projectID)
 
 	lu := os.Getenv("LOKI_URL")
 	if lu == "" {
