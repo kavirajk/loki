@@ -1,11 +1,23 @@
+local consul = import "consul/consul.libsonnet";
+
 (import 'ksonnet-util/kausal.libsonnet') +
 (import 'jaeger-agent-mixin/jaeger.libsonnet') +
 (import 'images.libsonnet') +
 (import 'common.libsonnet') +
 (import 'config.libsonnet') +
 (import 'overrides.libsonnet') +
-(import 'consul/consul.libsonnet') +
 
+consul + {
+  // Without consul-sidekick
+  consul_deployment:
+    deployment.new('consul', $._config.consul_replicas, [
+      $.consul_container,
+      $.consul_statsd_exporter,
+      $.consul_exporter,
+    ]) +
+    $.util.configMapVolumeMount($.consul_config_map, '/etc/config') +
+    $.util.antiAffinity,
+}
 // Loki services
 (import 'distributor.libsonnet') +
 (import 'ingester.libsonnet') +
