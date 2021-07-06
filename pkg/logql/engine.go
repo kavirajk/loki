@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"flag"
-	"fmt"
 	"math"
 	"sort"
 	"time"
@@ -166,7 +165,6 @@ func (q *query) Eval(ctx context.Context) (promql_parser.Value, error) {
 
 		defer util.LogErrorWithContext(ctx, "closing iterator", iter.Close)
 		streams, err := readStreams(iter, q.params.Limit(), q.params.Direction(), q.params.Interval())
-		fmt.Println("streams", streams, "end")
 		return streams, err
 	default:
 		return nil, errors.New("Unexpected type (%T): cannot evaluate")
