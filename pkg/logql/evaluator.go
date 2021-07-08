@@ -3,7 +3,6 @@ package logql
 import (
 	"container/heap"
 	"context"
-	"fmt"
 	"math"
 	"sort"
 	"time"
@@ -169,8 +168,6 @@ func (ev *DefaultEvaluator) StepEvaluator(
 ) (StepEvaluator, error) {
 	switch e := expr.(type) {
 	case *vectorAggregationExpr:
-		fmt.Println("in vector aggregation")
-		// fmt.Println("in vector aggregation", q.Start().Add(-e.left.interval).Add(-e.left.offset), q.End().Add(-e.left.offset))
 		if rangExpr, ok := e.left.(*rangeAggregationExpr); ok && e.operation == OpTypeSum {
 			// if range expression is wrapped with a vector expression
 			// we should send the vector expression for allowing reducing labels at the source.
@@ -191,7 +188,6 @@ func (ev *DefaultEvaluator) StepEvaluator(
 		}
 		return vectorAggEvaluator(ctx, nextEv, e, q)
 	case *rangeAggregationExpr:
-		fmt.Println("in range aggregation", q.Start().Add(-e.left.interval).Add(-e.left.offset), q.End().Add(-e.left.offset))
 		it, err := ev.querier.SelectSamples(ctx, SelectSampleParams{
 			&logproto.SampleQueryRequest{
 				Start:    q.Start().Add(-e.left.interval).Add(-e.left.offset),
