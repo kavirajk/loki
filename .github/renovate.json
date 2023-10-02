@@ -32,13 +32,19 @@
         "groupName": "docker-dependencies",
         "matchManagers": ["dockerfile"],
         "matchUpdateTypes": ["minor", "patch", "major"]
+      },
+      {
+        "groupName": "minor-and-patch-auto-merge",
+        "matchUpdateTypes": ["minor", "patch"],
+        "automerge": true,
       }
     ],
     "vulnerabilityAlerts": {
       "enabled": true,
-      "labels": ["security-update"]
+      "labels": ["area/security"]
     },
 
     "osvVulnerabilityAlerts": true,
-    "autoMerge": true
+    "prConcurrentLimit": 10,
+    "rebaseWhen": "conflicted",
   }
