@@ -39,5 +39,6 @@
       "labels": ["security-update"]
     },
 
-    "osvVulnerabilityAlerts": true
+    "osvVulnerabilityAlerts": true,
+    "autoMerge": true
   }
