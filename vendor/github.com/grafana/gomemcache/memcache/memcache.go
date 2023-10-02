@@ -135,7 +135,10 @@ func New(server ...string) *Client {
 
 // NewFromSelector returns a new Client using the provided ServerSelector.
 func NewFromSelector(ss ServerSelector) *Client {
-	c := &Client{selector: ss, closed: make(chan struct{})}
+	c := &Client{
+		selector: ss,
+		closed:   make(chan struct{}),
+	}
 
 	go c.releaseIdleConnectionsUntilClosed()
 
@@ -606,7 +609,8 @@ func (c *Client) GetMulti(keys []string, opts ...Option) (map[string]*Item, erro
 	ch := make(chan error, buffered)
 	for addr, keys := range keyMap {
 		go func(addr net.Addr, keys []string) {
-			ch <- c.getFromAddr(addr, keys, options, addItemToMap)
+			err := c.getFromAddr(addr, keys, options, addItemToMap)
+			ch <- err
 		}(addr, keys)
 	}
 
