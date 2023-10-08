@@ -1,8 +1,8 @@
-FROM golang:1.20.4
+FROM golang:1.21.2
 ENV CGO_ENABLED=0
 RUN go install github.com/go-delve/delve/cmd/dlv@v1.20.2
 
-FROM alpine:3.18.3
+FROM alpine:3.18.4
 
 RUN     mkdir /loki
 WORKDIR /loki
