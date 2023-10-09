@@ -3,6 +3,7 @@
     "extends": [
       "config:base"
     ],
+    "labels": ["dependencies"],
     "prHourlyLimit": 4,
     "baseBranches": ["main", "release-2.9.x", "release-2.8.x"],
     "packageRules": [
@@ -14,7 +15,7 @@
     ],
     "vulnerabilityAlerts": {
       "enabled": true,
-      "labels": ["area/security"]
+      "addLabels": ["area/security"]
     },
 
     "osvVulnerabilityAlerts": true,
