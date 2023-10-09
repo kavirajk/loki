@@ -10,23 +10,6 @@
         "matchBaseBranches": ["release-2.9.x","release-2.8.x"],
         "packagePatterns": ["*"],
         "enabled": false
-      },
-      {
-        "groupName": "go-docker-dependencies",
-        "matchManagers": ["dockerfile"],
-        "matchUpdateTypes": ["minor", "patch", "major"],
-        "matchPackageNames": [
-          "golang"
-        ]
-      },
-      {
-        "groupName": "alpine-docker-dependencies",
-        "matchManagers": ["dockerfile"],
-        "matchUpdateTypes": ["minor", "patch", "major"],
-        "matchPackageNames": [
-          "alpine/helm",
-          "alpine"
-        ]
       }
     ],
     "vulnerabilityAlerts": {
@@ -37,4 +20,5 @@
     "osvVulnerabilityAlerts": true,
     "prConcurrentLimit": 10,
     "rebaseWhen": "conflicted",
+    "branchPrefix": "deps-update/"
   }
