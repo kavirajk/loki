@@ -27,7 +27,7 @@
           "alpine/helm",
           "alpine"
         ]
-      },
+      }
     ],
     "vulnerabilityAlerts": {
       "enabled": true,
