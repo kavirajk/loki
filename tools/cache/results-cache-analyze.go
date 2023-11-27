@@ -43,7 +43,7 @@ var (
 	instantQueries = []instantQuery{
 		{
 			q:  `sum(bytes_rate({foo="bar"}[1h]))`,
-			ts: now,
+			ts: now, // TODO: experiment with different start time.
 		},
 	}
 
@@ -51,7 +51,7 @@ var (
 		{
 			q:     `sum(bytes_rate({foo="bar"}[5m]))`,
 			start: now.Add(-1 * time.Hour),
-			end:   now.Add(1 * time.Hour),
+			end:   now.Add(1 * time.Hour), // TODO: experiment with different start and end time
 			step:  (30 * time.Minute).Milliseconds(),
 		},
 	}
@@ -69,14 +69,17 @@ func main() {
 		panic("failed to listen on local addrs")
 	}
 
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", promhttp.Handler())
+
 	svr := &http.Server{
-		Handler: promhttp.Handler(),
+		Handler: mux,
 	}
 
 	go func() {
 		analyseInstant(instantQueries)
 
-		time.Sleep(60 * time.Second) // wait for the final prometheus scrape.
+		time.Sleep(30 * time.Second) // wait for the final prometheus scrape.
 
 		defer listener.Close() // shutdown http server
 	}()
@@ -158,7 +161,7 @@ func split_by_range(r instantQuery, limit mockLimits, offset bool) []instantQuer
 		panic(fmt.Errorf("failed to parse the query in range mapper: %w", err))
 	}
 	if noop {
-		// add a metric to it.
+		// TODO: add a metric to it.
 		fmt.Println("didn't split noop", "query", r.q, "split", interval)
 	}
 
