@@ -129,7 +129,7 @@ require (
 	golang.org/x/exp v0.0.0-20230713183714-613f0c0eb8a1
 	golang.org/x/oauth2 v0.10.0
 	golang.org/x/text v0.11.0
-	google.golang.org/protobuf v1.31.0
+	google.golang.org/protobuf v1.33.0
 	k8s.io/apimachinery v0.27.3
 )
 
