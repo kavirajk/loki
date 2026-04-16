@@ -1,6 +1,6 @@
 module main
 
-go 1.19
+go 1.24
 
 require (
 	github.com/aws/aws-lambda-go v1.26.0
@@ -20,7 +20,7 @@ require (
 	github.com/HdrHistogram/hdrhistogram-go v1.1.2 // indirect
 	github.com/alecthomas/units v0.0.0-20211218093645-b94a6e3cc137 // indirect
 	github.com/armon/go-metrics v0.4.0 // indirect
-	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.0.0 // indirect
+	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.8 // indirect
 	github.com/aws/aws-sdk-go-v2/credentials v1.11.0 // indirect
 	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.12.1 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/configsources v1.1.7 // indirect
@@ -31,7 +31,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/internal/s3shared v1.9.2 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sso v1.11.1 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.16.1 // indirect
-	github.com/aws/smithy-go v1.11.1 // indirect
+	github.com/aws/smithy-go v1.24.2 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.2.0 // indirect
 	github.com/coreos/go-semver v0.3.0 // indirect
