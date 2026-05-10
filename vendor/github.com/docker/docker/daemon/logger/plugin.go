@@ -22,7 +22,7 @@ const extName = "LogDriver"
 type logPlugin interface {
 	StartLogging(streamPath string, info Info) (err error)
 	StopLogging(streamPath string) (err error)
-	Capabilities() (cap Capability, err error)
+	Capabilities() (capability Capability, err error)
 	ReadLogs(info Info, config ReadConfig) (stream io.ReadCloser, err error)
 }
 
@@ -77,7 +77,7 @@ func makePluginCreator(name string, l logPlugin, scopePath func(s string) string
 
 		unscopedPath := filepath.Join("/", "run", "docker", "logging")
 		logRoot := scopePath(unscopedPath)
-		if err := os.MkdirAll(logRoot, 0700); err != nil {
+		if err := os.MkdirAll(logRoot, 0o700); err != nil {
 			return nil, err
 		}
 
@@ -90,9 +90,9 @@ func makePluginCreator(name string, l logPlugin, scopePath func(s string) string
 			logInfo:    logCtx,
 		}
 
-		cap, err := a.plugin.Capabilities()
+		caps, err := a.plugin.Capabilities()
 		if err == nil {
-			a.capabilities = cap
+			a.capabilities = caps
 		}
 
 		stream, err := openPluginStream(a)
@@ -107,7 +107,7 @@ func makePluginCreator(name string, l logPlugin, scopePath func(s string) string
 			return nil, errors.Wrapf(err, "error creating logger")
 		}
 
-		if cap.ReadLogs {
+		if caps.ReadLogs {
 			return &pluginAdapterWithRead{a}, nil
 		}
 
