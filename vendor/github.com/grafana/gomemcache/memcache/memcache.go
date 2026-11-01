@@ -20,6 +20,7 @@ package memcache
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -48,7 +49,7 @@ var (
 	// CompareAndSwap) failed because the condition was not satisfied.
 	ErrNotStored = errors.New("memcache: item not stored")
 
-	// ErrServer means that a server error occurred.
+	// ErrServerError means that a server error occurred.
 	ErrServerError = errors.New("memcache: server error")
 
 	// ErrNoStats means that no statistics were available.
@@ -83,16 +84,37 @@ const (
 
 const buffered = 8 // arbitrary buffered channel size, for readability
 
-// resumableError returns true if err is only a protocol-level cache error.
+// resumableError returns true if err is only a protocol-level error.
 // This is used to determine whether or not a server connection should
 // be re-used or not. If an error occurs, by default we don't reuse the
-// connection, unless it was just a cache error.
+// connection, unless it was just a protocol-level error.
+//
+// SERVER_ERROR replies are resumable: memcached sends them as complete,
+// well-formed lines and keeps the connection in sync (on storage errors it
+// even swallows the request's data block; see process_update_command in
+// memcached's proto_text.c). The known exception is "out of memory reading
+// request", which closes the connection server-side; reusing it costs one
+// failed request, the same as any stale pooled connection.
 func resumableError(err error) bool {
-	switch err {
-	case ErrCacheMiss, ErrCASConflict, ErrNotStored, ErrMalformedKey:
+	switch {
+	case errors.Is(err, ErrCacheMiss),
+		errors.Is(err, ErrCASConflict),
+		errors.Is(err, ErrNotStored),
+		errors.Is(err, ErrMalformedKey),
+		errors.Is(err, ErrServerError):
 		return true
 	}
 	return false
+}
+
+// serverErrorFromLine returns an error wrapping ErrServerError if line is a
+// SERVER_ERROR response, or nil otherwise.
+func serverErrorFromLine(line []byte) error {
+	if !bytes.HasPrefix(line, resultServerErrorPrefix) {
+		return nil
+	}
+	msg := bytes.TrimSuffix(line[len(resultServerErrorPrefix):], crlf)
+	return fmt.Errorf("%w: %s", ErrServerError, msg)
 }
 
 func legalKey(key string) bool {
@@ -120,6 +142,7 @@ var (
 	resultTouched   = []byte("TOUCHED\r\n")
 
 	resultClientErrorPrefix = []byte("CLIENT_ERROR ")
+	resultServerErrorPrefix = []byte("SERVER_ERROR ")
 	versionPrefix           = []byte("VERSION")
 	valuePrefix             = []byte("VALUE ")
 )
@@ -135,7 +158,10 @@ func New(server ...string) *Client {
 
 // NewFromSelector returns a new Client using the provided ServerSelector.
 func NewFromSelector(ss ServerSelector) *Client {
-	c := &Client{selector: ss, closed: make(chan struct{})}
+	c := &Client{
+		selector: ss,
+		closed:   make(chan struct{}),
+	}
 
 	go c.releaseIdleConnectionsUntilClosed()
 
@@ -230,6 +256,10 @@ func (cn *conn) release() {
 
 func (cn *conn) extendDeadline() {
 	_ = cn.nc.SetDeadline(time.Now().Add(cn.c.netTimeout()))
+}
+
+func (cn *conn) extendDeadlineLong() {
+	_ = cn.nc.SetDeadline(time.Now().Add(5 * cn.c.netTimeout()))
 }
 
 // condRelease releases this connection if the error pointed to by err
@@ -399,6 +429,11 @@ func (c *Client) dial(addr net.Addr) (net.Conn, error) {
 }
 
 func (c *Client) getConn(addr net.Addr) (*conn, error) {
+	var (
+		writer *bufio.Writer
+		reader *bufio.Reader
+	)
+
 	cn, ok := c.getFreeConn(addr)
 	if ok {
 		cn.extendDeadline()
@@ -408,10 +443,14 @@ func (c *Client) getConn(addr net.Addr) (*conn, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	writer = bufio.NewWriter(nc)
+	reader = bufio.NewReader(nc)
+
 	cn = &conn{
 		nc:   nc,
 		addr: addr,
-		rw:   bufio.NewReadWriter(bufio.NewReader(nc), bufio.NewWriter(nc)),
+		rw:   bufio.NewReadWriter(reader, writer),
 		c:    c,
 	}
 	cn.extendDeadline()
@@ -443,7 +482,7 @@ func (c *Client) FlushAll() error {
 func (c *Client) Get(key string, opts ...Option) (item *Item, err error) {
 	options := newOptions(opts...)
 	err = c.withKeyAddr(key, func(addr net.Addr) error {
-		return c.getFromAddr(addr, []string{key}, options, func(it *Item) { item = it })
+		return c.getFromAddr(context.Background(), addr, []string{key}, options, func(it *Item) { item = it })
 	})
 	if err == nil && item == nil {
 		err = ErrCacheMiss
@@ -473,30 +512,31 @@ func (c *Client) withKeyAddr(key string, fn func(net.Addr) error) (err error) {
 	return fn(addr)
 }
 
-func (c *Client) withAddrRw(addr net.Addr, fn func(*bufio.ReadWriter) error) (err error) {
+func (c *Client) withAddrRw(addr net.Addr, fn func(*conn) error) (err error) {
 	cn, err := c.getConn(addr)
 	if err != nil {
 		return err
 	}
 	defer cn.condRelease(&err)
-	return fn(cn.rw)
+	return fn(cn)
 }
 
-func (c *Client) withKeyRw(key string, fn func(*bufio.ReadWriter) error) error {
+func (c *Client) withKeyRw(key string, fn func(*conn) error) error {
 	return c.withKeyAddr(key, func(addr net.Addr) error {
 		return c.withAddrRw(addr, fn)
 	})
 }
 
-func (c *Client) getFromAddr(addr net.Addr, keys []string, opts *Options, cb func(*Item)) error {
-	return c.withAddrRw(addr, func(rw *bufio.ReadWriter) error {
+func (c *Client) getFromAddr(ctx context.Context, addr net.Addr, keys []string, opts *Options, cb func(*Item)) error {
+	return c.withAddrRw(addr, func(conn *conn) error {
+		rw := conn.rw
 		if _, err := fmt.Fprintf(rw, "gets %s\r\n", strings.Join(keys, " ")); err != nil {
 			return err
 		}
 		if err := rw.Flush(); err != nil {
 			return err
 		}
-		if err := c.parseGetResponse(rw.Reader, opts, cb); err != nil {
+		if err := c.parseGetResponse(ctx, rw.Reader, conn, opts, cb); err != nil {
 			return err
 		}
 		return nil
@@ -505,7 +545,8 @@ func (c *Client) getFromAddr(addr net.Addr, keys []string, opts *Options, cb fun
 
 // flushAllFromAddr send the flush_all command to the given addr
 func (c *Client) flushAllFromAddr(addr net.Addr) error {
-	return c.withAddrRw(addr, func(rw *bufio.ReadWriter) error {
+	return c.withAddrRw(addr, func(conn *conn) error {
+		rw := conn.rw
 		if _, err := fmt.Fprintf(rw, "flush_all\r\n"); err != nil {
 			return err
 		}
@@ -528,7 +569,8 @@ func (c *Client) flushAllFromAddr(addr net.Addr) error {
 
 // ping sends the version command to the given addr
 func (c *Client) ping(addr net.Addr) error {
-	return c.withAddrRw(addr, func(rw *bufio.ReadWriter) error {
+	return c.withAddrRw(addr, func(conn *conn) error {
+		rw := conn.rw
 		if _, err := fmt.Fprintf(rw, "version\r\n"); err != nil {
 			return err
 		}
@@ -551,7 +593,8 @@ func (c *Client) ping(addr net.Addr) error {
 }
 
 func (c *Client) touchFromAddr(addr net.Addr, keys []string, expiration int32) error {
-	return c.withAddrRw(addr, func(rw *bufio.ReadWriter) error {
+	return c.withAddrRw(addr, func(conn *conn) error {
+		rw := conn.rw
 		for _, key := range keys {
 			if _, err := fmt.Fprintf(rw, "touch %s %d\r\n", key, expiration); err != nil {
 				return err
@@ -569,6 +612,9 @@ func (c *Client) touchFromAddr(addr net.Addr, keys []string, expiration int32) e
 			case bytes.Equal(line, resultNotFound):
 				return ErrCacheMiss
 			default:
+				if err := serverErrorFromLine(line); err != nil {
+					return err
+				}
 				return fmt.Errorf("memcache: unexpected response line from touch: %q", string(line))
 			}
 		}
@@ -580,11 +626,18 @@ func (c *Client) touchFromAddr(addr net.Addr, keys []string, expiration int32) e
 // items may have fewer elements than the input slice, due to memcache
 // cache misses. Each key must be at most 250 bytes in length.
 // If no error is returned, the returned map will also be non-nil.
-func (c *Client) GetMulti(keys []string, opts ...Option) (map[string]*Item, error) {
+func (c *Client) GetMulti(ctx context.Context, keys []string, opts ...Option) (map[string]*Item, error) {
+	// Check if context is already cancelled before doing any work
+	select {
+	case <-ctx.Done():
+		return nil, fmt.Errorf("memcache GetMulti: %w", ctx.Err())
+	default:
+	}
+
 	options := newOptions(opts...)
 
 	var lk sync.Mutex
-	m := make(map[string]*Item)
+	m := make(map[string]*Item, len(keys))
 	addItemToMap := func(it *Item) {
 		lk.Lock()
 		defer lk.Unlock()
@@ -606,48 +659,52 @@ func (c *Client) GetMulti(keys []string, opts ...Option) (map[string]*Item, erro
 	ch := make(chan error, buffered)
 	for addr, keys := range keyMap {
 		go func(addr net.Addr, keys []string) {
-			ch <- c.getFromAddr(addr, keys, options, addItemToMap)
+			ch <- c.getFromAddr(ctx, addr, keys, options, addItemToMap)
 		}(addr, keys)
 	}
 
 	var err error
-	for range keyMap {
-		if ge := <-ch; ge != nil {
+	for i := 0; i < len(keyMap); i++ {
+		ge := <-ch
+		if ge != nil {
 			err = ge
 		}
+	}
+	if ctx.Err() != nil {
+		return nil, fmt.Errorf("memcache GetMulti: %w", ctx.Err())
 	}
 	return m, err
 }
 
 // parseGetResponse reads a GET response from r and calls cb for each
 // read and allocated Item
-func (c *Client) parseGetResponse(r *bufio.Reader, opts *Options, cb func(*Item)) error {
+func (c *Client) parseGetResponse(ctx context.Context, r *bufio.Reader, conn *conn, opts *Options, cb func(*Item)) error {
+	lineReader := allocatingLineReader{
+		allocator: opts.Alloc,
+	}
 	for {
-		line, err := r.ReadSlice('\n')
-		if err != nil {
-			return err
-		}
-		if bytes.Equal(line, resultEnd) {
+		// Check if context is cancelled before allocating memory
+		select {
+		case <-ctx.Done():
+			// Try to discard the rest of the response to keep the connection in a good state
+			// We don't want to block forever here, so use a longer deadline than usual, but don't renew it on every item read.
+			conn.extendDeadlineLong()
+			err := tryDiscardLines(r)
+			if err != nil {
+				return fmt.Errorf("memcache GetMulti: %w %w", ctx.Err(), err)
+			}
 			return nil
+		default:
 		}
-		it := new(Item)
-		size, err := scanGetResponseLine(line, it)
-		if err != nil {
+
+		// extend deadline before each additional call, otherwise all cumulative calls use the same overall deadline
+		conn.extendDeadline()
+		it, err := readLine(r, lineReader)
+		if errors.Is(err, io.EOF) {
+			return nil
+		} else if err != nil {
 			return err
 		}
-		buffSize := size + 2
-		buff := opts.Alloc.Get(buffSize)
-		it.Value = (*buff)[:buffSize]
-		_, err = io.ReadFull(r, it.Value)
-		if err != nil {
-			opts.Alloc.Put(buff)
-			return err
-		}
-		if !bytes.HasSuffix(it.Value, crlf) {
-			opts.Alloc.Put(buff)
-			return fmt.Errorf("memcache: corrupt get result read")
-		}
-		it.Value = it.Value[:size]
 		cb(it)
 	}
 }
@@ -781,7 +838,12 @@ func (c *Client) populateOne(rw *bufio.ReadWriter, verb string, item *Item) erro
 		return ErrCASConflict
 	case bytes.Equal(line, resultNotFound):
 		return ErrCacheMiss
+	default:
+		if err := serverErrorFromLine(line); err != nil {
+			return err
+		}
 	}
+
 	return fmt.Errorf("memcache: unexpected response line from %q: %q", verb, string(line))
 }
 
@@ -813,6 +875,11 @@ func writeExpectf(rw *bufio.ReadWriter, expect []byte, format string, args ...in
 		return ErrCASConflict
 	case bytes.Equal(line, resultNotFound):
 		return ErrCacheMiss
+	default:
+		if err := serverErrorFromLine(line); err != nil {
+			return err
+		}
+
 	}
 	return fmt.Errorf("memcache: unexpected response line: %q", string(line))
 }
@@ -820,15 +887,15 @@ func writeExpectf(rw *bufio.ReadWriter, expect []byte, format string, args ...in
 // Delete deletes the item with the provided key. The error ErrCacheMiss is
 // returned if the item didn't already exist in the cache.
 func (c *Client) Delete(key string) error {
-	return c.withKeyRw(key, func(rw *bufio.ReadWriter) error {
-		return writeExpectf(rw, resultDeleted, "delete %s\r\n", key)
+	return c.withKeyRw(key, func(conn *conn) error {
+		return writeExpectf(conn.rw, resultDeleted, "delete %s\r\n", key)
 	})
 }
 
 // DeleteAll deletes all items in the cache.
 func (c *Client) DeleteAll() error {
-	return c.withKeyRw("", func(rw *bufio.ReadWriter) error {
-		return writeExpectf(rw, resultDeleted, "flush_all\r\n")
+	return c.withKeyRw("", func(conn *conn) error {
+		return writeExpectf(conn.rw, resultDeleted, "flush_all\r\n")
 	})
 }
 
@@ -859,7 +926,8 @@ func (c *Client) Decrement(key string, delta uint64) (newValue uint64, err error
 
 func (c *Client) incrDecr(verb, key string, delta uint64) (uint64, error) {
 	var val uint64
-	err := c.withKeyRw(key, func(rw *bufio.ReadWriter) error {
+	err := c.withKeyRw(key, func(conn *conn) error {
+		rw := conn.rw
 		line, err := writeReadLine(rw, "%s %s %d\r\n", verb, key, delta)
 		if err != nil {
 			return err
@@ -870,6 +938,8 @@ func (c *Client) incrDecr(verb, key string, delta uint64) (uint64, error) {
 		case bytes.HasPrefix(line, resultClientErrorPrefix):
 			errMsg := line[len(resultClientErrorPrefix) : len(line)-2]
 			return errors.New("memcache: client error: " + string(errMsg))
+		case bytes.HasPrefix(line, resultServerErrorPrefix):
+			return serverErrorFromLine(line)
 		}
 		val, err = strconv.ParseUint(string(line[:len(line)-2]), 10, 64)
 		if err != nil {
